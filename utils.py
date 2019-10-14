@@ -7,7 +7,7 @@ import json
 import os
 
 import numpy as np
-import progressbar
+#import progressbar
 
 import chainer
 from chainer import cuda
@@ -57,8 +57,9 @@ def convert_xt_batch_seq(xt_batch_seq, gpu):
 
 
 def count_words_from_file(counts, file_path):
-    bar = progressbar.ProgressBar()
-    for l in bar(io.open(file_path, encoding='utf-8')):
+    #bar = progressbar.ProgressBar()
+    #for l in bar(io.open(file_path, encoding='utf-8')):
+    for l in io.open(file_path, encoding='utf-8'):
         # TODO: parallel
         if l.strip():
             words = l.strip().split()
