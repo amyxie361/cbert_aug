@@ -55,7 +55,7 @@ class DataProcessor(object):
             return lines
 
     @classmethod
-    def _read_json(cls):
+    def _read_json(cls, input_file):
         """Reads a jason dataset in the format:
         [{"question":...,"context":...,"answers":[], "id":...}]"""
         with open(input_file, "r") as f:
@@ -423,6 +423,8 @@ def main():
                         help="The output dir for augmented dataset")
     parser.add_argument("--bert_model", default="bert-base-uncased", type=str,
                         help="The path of pretrained bert model.")
+    parser.add_argument("--model_path", default="", type=str,
+                        help="the path to finetuned bert")
     parser.add_argument("--task_name",default="TREC",type=str,
                         help="The name of the task to train.")
     parser.add_argument("--max_seq_length", default=64, type=int,
@@ -447,7 +449,10 @@ def main():
     with open("global.config", 'rb') as f:
         configs_dict = json.load(f)
 
-    args.task_name = configs_dict.get("dataset")
+    args.task_name = configs_dict.get("task_name")
+    args.data_dir = configs_dict.get("data_dir")
+    args.output_dir = configs_dict.get("output_dir")
+    args.model_path = configs_dict.get("model_path")
     print(args)
     run_aug(args, save_every_epoch=False)
 
@@ -491,8 +496,8 @@ def run_aug(args, save_every_epoch=False):
         weights_path = os.path.join(PYTORCH_PRETRAINED_BERT_CACHE, model_name)
         model = torch.load(weights_path)
         return model
-    cbert_name = "{}/BertForMaskedLM_{}_epoch_10".format(task_name.lower(), task_name.lower())
-    model = load_model(cbert_name)
+    #cbert_name = "{}/BertForMaskedLM_{}_epoch_10".format(task_name.lower(), task_name.lower())
+    model = load_model(args.model_path)
     model.cuda()
 
     # Prepare optimizer
@@ -507,7 +512,7 @@ def run_aug(args, save_every_epoch=False):
                          warmup=args.warmup_proportion,t_total=t_total)
 
     global_step = 0
-    if task_name = "squad":
+    if task_name == "squad":
         train_features = convert_examples_to_features_squad(
             train_examples, label_list, args.max_seq_length, tokenizer)
     else:
@@ -522,12 +527,12 @@ def run_aug(args, save_every_epoch=False):
     all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
     all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
     all_masked_lm_labels = torch.tensor([f.masked_lm_labels for f in train_features], dtype=torch.long)
-    if task_name = "squad":
+    if task_name == "squad":
         all_qa_ids = torch.tensor([f.qa_id for f in train_features], dtype=torch.string)
         train_data = TensorDataset(all_init_ids, all_input_ids, all_input_mask, all_segment_ids,
                                    all_masked_lm_labels, all_qa_ids)
     else:
-        train_data = TensorDataset(all_init_ids, all_input_ids, all_input_mask, all_segment_ids, all_masked_lm_labels)    train_sampler = RandomSampler(train_data)
+        train_data = TensorDataset(all_init_ids, all_input_ids, all_input_mask, all_segment_ids, all_masked_lm_labels)
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 
