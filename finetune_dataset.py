@@ -54,6 +54,14 @@ class DataProcessor(object):
                 lines.append(line)
             return lines
 
+    @classmethod
+    def _read_json(cls):
+        """Reads a jason dataset in the format:
+        [{"question":...,"context":...,"answers":[], "id":...}]"""
+        with open(input_file, "r") as f:
+            data = json.load(f)
+            return data
+
 
 class InputExample(object):
     """A single training/test example for simple sequence classification."""
@@ -70,6 +78,21 @@ class InputExample(object):
         self.text_a = text_a
         self.label = label
 
+class InputSquadExample(object):
+    """A single training/test example for simple sequence classification."""
+
+    def __init__(self, guid, question, paragraph=None, answers=None):
+        """Constructs a InputExample.
+
+        Args:
+            guid: Unique id for the example.
+            text_a: string. The untokenized text of the first sequence. For single
+            sequence tasks, only this sequence must be specified.
+        """
+        self.guid = guid
+        self.question = question
+        self.paragraph = paragraph
+        self.answers = answers
 
 class InputFeatures(object):
     """A single set of features of data."""
@@ -80,6 +103,18 @@ class InputFeatures(object):
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.masked_lm_labels = masked_lm_labels
+
+class InputFeaturesSquad(object):
+    """A single set of features of data."""
+
+    def __init__(self, init_ids, input_ids, input_mask, segment_ids, masked_lm_labels, qa_id):
+        self.init_ids = init_ids
+        self.input_ids = input_ids
+        self.input_mask = input_mask
+        self.segment_ids = segment_ids
+        self.masked_lm_labels = masked_lm_labels
+        self.qa_id = qa_id
+
 
 class AugProcessor(DataProcessor):
     """Processor for dataset to be augmented."""
@@ -114,6 +149,43 @@ class AugProcessor(DataProcessor):
             label = line[-1]
             examples.append(
                 InputExample(guid=guid, text_a=text_a, label=label))
+        return examples
+
+class SquadProcessor(DataProcessor):
+    """Processor for dataset to be augmented."""
+
+    def get_train_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_json(os.path.join(data_dir, "train.json")), "train")
+
+    def get_dev_examples(self, data_dir):
+        """See base class."""
+        return self._create_examples(
+            self._read_json(os.path.join(data_dir, "dev.json")), "dev")
+
+    def get_labels(self, name):
+        """add your dataset here"""
+        if name in ['stsa.binary', 'mpqa', 'rt-polarity', 'subj']:
+            return ["0", "1"]
+        elif name in ['stsa.fine']:
+            return ["0", "1", "2", "3", "4"]
+        elif name in ['TREC']:
+            return ["0", "1", "2", "3", "4", "5"]
+        elif name in ["squad"]:
+            return ["0"]
+
+    def _create_examples(self, qas, set_type):
+        """Creates examples for the training and dev sets."""
+        examples = []
+        for qa in qas:
+            id_ = qa["id"]
+            guid = "%s-%s" % (set_type, id_)
+            question = qa["question"]
+            paragraph = qa["context"]
+            answers = qa["answers"]
+            examples.append(
+                InputSquadExample(guid=guid, question=question, paragraph=paragraph, answers=answers))
         return examples
 
 def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer):
@@ -228,6 +300,120 @@ def convert_examples_to_features(examples, label_list, max_seq_length, tokenizer
                           masked_lm_labels=masked_lm_labels))
     return features
 
+def convert_examples_to_features_squad(examples, label_list, max_seq_length, tokenizer):
+    """Loads a data file into a list of `InputBatch`s."""
+
+    # label_map = {}
+    # for (i, label) in enumerate(label_list):
+    #     label_map[label] = i
+
+    features = []
+    # ----
+    dupe_factor = 5
+    masked_lm_prob = 0.15
+    max_predictions_per_seq = 20
+    rng = random.Random(12345)
+
+    for example in examples:
+        tokens_a = tokenizer.tokenize(example.question)
+        # segment_id = label_map[example.label]
+        segment_id = 0
+        # Account for [CLS] and [SEP] with "- 2"
+        if len(tokens_a) > max_seq_length - 2:
+            tokens_a = tokens_a[0:(max_seq_length - 2)]
+
+        # Due to we use conditional bert, we need to place label information in segment_ids
+        tokens = []
+        segment_ids = []
+        # is [CLS]和[SEP] needed ？
+        tokens.append("[CLS]")
+        segment_ids.append(segment_id)
+        for token in tokens_a:
+            tokens.append(token)
+            segment_ids.append(segment_id)
+        tokens.append("[SEP]")
+        segment_ids.append(segment_id)
+        masked_lm_labels = [-1] * max_seq_length
+
+        cand_indexes = []
+        for (i, token) in enumerate(tokens):
+            if token == "[CLS]" or token == "[SEP]":
+                continue
+            cand_indexes.append(i)
+
+        rng.shuffle(cand_indexes)
+        len_cand = len(cand_indexes)
+
+        output_tokens = list(tokens)
+
+        num_to_predict = min(max_predictions_per_seq,
+                             max(1, int(round(len(tokens) * masked_lm_prob))))
+
+        masked_lms_pos = []
+        covered_indexes = set()
+        for index in cand_indexes:
+            if len(masked_lms_pos) >= num_to_predict:
+                break
+            if index in covered_indexes:
+                continue
+            covered_indexes.add(index)
+
+            masked_token = None
+            # 80% of the time, replace with [MASK]
+            if rng.random() < 0.8:
+                masked_token = "[MASK]"
+            else:
+                # 10% of the time, keep original
+                if rng.random() < 0.5:
+                    masked_token = tokens[index]
+                # 10% of the time, replace with random word
+                else:
+                    masked_token = tokens[cand_indexes[rng.randint(0, len_cand - 1)]]
+
+            masked_lm_labels[index] = tokenizer.convert_tokens_to_ids([tokens[index]])[0]
+            output_tokens[index] = masked_token
+            masked_lms_pos.append(index)
+
+        init_ids = tokenizer.convert_tokens_to_ids(tokens)
+        input_ids = tokenizer.convert_tokens_to_ids(output_tokens)
+
+        # The mask has 1 for real tokens and 0 for padding tokens. Only real
+        # tokens are attended to.
+        input_mask = [1] * len(input_ids)
+
+        # Zero-pad up to the sequence length.
+        while len(input_ids) < max_seq_length:
+            init_ids.append(0)
+            input_ids.append(0)
+            input_mask.append(0)
+            segment_ids.append(0)  # ?segment_id
+
+        assert len(init_ids) == max_seq_length
+        assert len(input_ids) == max_seq_length
+        assert len(input_mask) == max_seq_length
+        assert len(segment_ids) == max_seq_length
+
+        # if ex_index < 2:
+        #     logger.info("*** Example ***")
+        #     logger.info("guid: %s" % (example.guid))
+        #     logger.info("tokens: %s" % " ".join(
+        #         [str(x) for x in tokens]))
+        #     logger.info("init_ids: %s" % " ".join([str(x) for x in init_ids]))
+        #     logger.info("input_ids: %s" % " ".join([str(x) for x in input_ids]))
+        #     logger.info("input_mask: %s" % " ".join([str(x) for x in input_mask]))
+        #     logger.info(
+        #         "segment_ids: %s" % " ".join([str(x) for x in segment_ids]))
+        #     logger.info("masked_lm_labels: %s" % " ".join([str(x) for x in masked_lm_labels]))
+
+        features.append(
+            InputFeaturesSquad(init_ids=init_ids,
+                          input_ids=input_ids,
+                          input_mask=input_mask,
+                          segment_ids=segment_ids,
+                          masked_lm_labels=masked_lm_labels,
+                          qa_id=example.guid))
+    return features
+
 def rev_wordpiece(str):
     #print(str)
     if len(str) > 1:
@@ -287,6 +473,7 @@ def run_aug(args, save_every_epoch=False):
         "mpqa": AugProcessor,
         "rt-polarity": AugProcessor,
         "subj": AugProcessor,
+        "squad":SquadProcessor,
     }
 
     task_name = args.task_name
@@ -335,8 +522,12 @@ def run_aug(args, save_every_epoch=False):
                          warmup=args.warmup_proportion,t_total=t_total)
 
     global_step = 0
-    train_features = convert_examples_to_features(
-        train_examples, label_list, args.max_seq_length, tokenizer)
+    if task_name = "squad":
+        train_features = convert_examples_to_features_squad(
+            train_examples, label_list, args.max_seq_length, tokenizer)
+    else:
+        train_features = convert_examples_to_features(
+            train_examples, label_list, args.max_seq_length, tokenizer)
     logger.info("***** Running training *****")
     logger.info("  Num examples = %d", len(train_examples))
     logger.info("  Batch size = %d", args.train_batch_size)
@@ -346,7 +537,12 @@ def run_aug(args, save_every_epoch=False):
     all_input_mask = torch.tensor([f.input_mask for f in train_features], dtype=torch.long)
     all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
     all_masked_lm_labels = torch.tensor([f.masked_lm_labels for f in train_features], dtype=torch.long)
-    train_data = TensorDataset(all_init_ids, all_input_ids, all_input_mask, all_segment_ids, all_masked_lm_labels)
+    if task_name = "squad":
+        all_qa_ids = torch.tensor([f.qa_id for f in train_features], dtype=torch.string)
+        train_data = TensorDataset(all_init_ids, all_input_ids, all_input_mask, all_segment_ids,
+                                   all_masked_lm_labels, all_qa_ids)
+    else:
+        train_data = TensorDataset(all_init_ids, all_input_ids, all_input_mask, all_segment_ids, all_masked_lm_labels)
     train_sampler = RandomSampler(train_data)
     train_dataloader = DataLoader(train_data, sampler=train_sampler, batch_size=args.train_batch_size)
 

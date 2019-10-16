@@ -249,13 +249,13 @@ def main():
                         help="The output dir for augmented dataset")
     parser.add_argument("--bert_model", default="bert-base-uncased", type=str,
                         help="The path of pretrained bert model.")
-    parser.add_argument("--task_name",default="subj",type=str,
+    parser.add_argument("--task_name",default="TREC",type=str,
                         help="The name of the task to train.")
     parser.add_argument("--max_seq_length", default=64, type=int,
                         help="The maximum total input sequence length after WordPiece tokenization. \n"
                              "Sequences longer than this will be truncated, and sequences shorter \n"
                              "than this will be padded.")
-    parser.add_argument("--do_lower_case", default=False, action='store_true',
+    parser.add_argument("--do_lower_case", default=True, action='store_false',
                         help="Set this flag if you are using an uncased model.")
     parser.add_argument("--train_batch_size", default=32, type=int,
                         help="Total batch size for training.")
