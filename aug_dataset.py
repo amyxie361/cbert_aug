@@ -453,6 +453,7 @@ def main():
     args.data_dir = configs_dict.get("data_dir")
     args.output_dir = configs_dict.get("output_dir")
     args.model_path = configs_dict.get("model_path")
+    args.num_train_epochs = configs_dict.get("num_train_epochs")
     print(args)
     run_aug(args, save_every_epoch=False)
 
@@ -489,7 +490,7 @@ def run_aug(args, save_every_epoch=False):
     train_examples = processor.get_train_examples(args.data_dir)
     #dev_examples = processor.get_dev_examples(args.data_dir)
     #train_examples.extend(dev_examples)
-    num_train_steps = int(len(train_examples) / args.train_batch_size * args.num_train_epochs)
+    num_train_steps = int(len(train_examples) / args.train_batch_size * args.num_train_epochs) + 1
 
     # Prepare model
     def load_model(model_name):
@@ -528,7 +529,7 @@ def run_aug(args, save_every_epoch=False):
     all_segment_ids = torch.tensor([f.segment_ids for f in train_features], dtype=torch.long)
     all_masked_lm_labels = torch.tensor([f.masked_lm_labels for f in train_features], dtype=torch.long)
     if task_name == "squad":
-        all_qa_ids = torch.tensor([f.qa_id for f in train_features], dtype=torch.string)
+        all_qa_ids = torch.tensor([[ord(c) for c in f.qa_id] for f in train_features], dtype=torch.int)
         train_data = TensorDataset(all_init_ids, all_input_ids, all_input_mask, all_segment_ids,
                                    all_masked_lm_labels, all_qa_ids)
     else:
@@ -541,8 +542,12 @@ def run_aug(args, save_every_epoch=False):
         os.mkdir(save_model_dir)
     MASK_id = tokenizer.convert_tokens_to_ids(['[MASK]'])[0]
 
-    origin_train_path = os.path.join(args.output_dir, "train_origin.tsv")
-    save_train_path = os.path.join(args.output_dir, "train.tsv")
+    if args.task_name == "squad":
+        origin_train_path = os.path.join(args.output_dir, "train_origin.json")
+        save_train_path = os.path.join(args.output_dir, "train.json")
+    else:
+        origin_train_path = os.path.join(args.output_dir, "train_origin.tsv")
+        save_train_path = os.path.join(args.output_dir, "train.tsv")
     shutil.copy(origin_train_path, save_train_path)
     best_test_acc = train_text_classifier.train("aug_data")
     print("before augment best acc:{}".format(best_test_acc))
@@ -553,7 +558,8 @@ def run_aug(args, save_every_epoch=False):
         for step, batch in enumerate(train_dataloader):
             model.train()
             batch = tuple(t.cuda() for t in batch)
-            _, input_ids, input_mask, segment_ids, masked_ids = batch
+            # all_init_ids, all_input_ids, all_input_mask, all_segment_ids, all_masked_lm_labels, all_qa_ids
+            _, input_ids, input_mask, segment_ids, masked_ids, qa_ids = batch
             loss = model(input_ids, segment_ids, input_mask, masked_ids)
             loss.backward()
             avg_loss += loss.item()
